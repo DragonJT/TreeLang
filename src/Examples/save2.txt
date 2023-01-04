@@ -1,0 +1,10 @@
+class a
+int a
+int b
+#goto 2
+void Test()
+x=expr
+#goto 3
+var x=expr
+#goto 7
+int c
