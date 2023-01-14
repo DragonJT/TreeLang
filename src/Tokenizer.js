@@ -1,7 +1,7 @@
 function Tokenizer(code){
     var index = 0;
     var tokens = [];
-    var literals = new Set(['class', 'if', 'for', 'enum', 'expr']);
+    var literals = new Set(['class', 'struct', 'if', 'for', 'enum']);
 
     function CreateToken(name, value){
         return {name:name, value:value};

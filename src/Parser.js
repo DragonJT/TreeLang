@@ -14,156 +14,104 @@ class TokenReader{
     }
 }
 
-function ParseError(msg){
-    return {constructorType:'Error', msg:msg};
-}
-
-function CalcLineData(obj, line, parser){
-    var deltaLine = line;
-    var index = 0;
-    for(var o of obj.body){
-        var lastLineCount = parser.LineCount(o);
-        deltaLine -= lastLineCount;
-        if(deltaLine<0){
-            var currentLine = deltaLine+lastLineCount;
-            if(lastLineCount > 1 && currentLine > 0){
-                return parser.LineData(o, currentLine-1);
-            }
-            return {obj:obj, parser:parser, index:index};
-        }
-        index++;
-    }
-    return {obj:obj, parser:parser, index:index};    
-}
-
-function ParseValue(reader, name){
+function ParseToken(reader, name){
     if(!reader.TryGetCurrent())
-        return ParseError('End of File');
-    var token = reader.Current();
-    if(token.name == name){
-        var result = {constructorType:name, value:token.value};
+        return {error:true, msg:'OutOfRange'};
+    var current = reader.Current();
+    if(current.name == name){
         reader.index++;
-        return result;
+        return {error:false, value:current.value};
     }
-    return ParseError(`Expecting ${name} got ${token.name}`);
+    return {error:true, msg:`${name} doesn't match ${current.name}`};
 }
 
-class PsLiteral{
-    constructor(literal, color){
-        this.literal = literal;
+class PsToken{
+    constructor(name, color, isText){
+        this.name = name;
         this.color = color;
-        this.isText = true;
+        this.isText = isText;
     }
 
     Parse(reader){
-        return ParseValue(reader, this.literal);
+        return ParseToken(reader, this.name);
     }
 
-    Draw(editor){
-        editor.DrawText(this.literal, this.color);
-    }
-}
-
-class PsPunctuation{
-    constructor(punctuation, color){
-        this.punctuation = punctuation;
-        this.color = color;
-        this.isText = false;
-    }
-
-    Parse(reader){
-        return ParseValue(reader, this.punctuation);
-    }
-
-    Draw(editor){
-        editor.DrawText(this.punctuation, this.color);
-    }
-}
-
-class PsIdentifier{
-    constructor(color){
-        this.isText = true;
-        this.color = color;
-    }
-
-    Parse(reader){
-        return ParseValue(reader, 'Identifier');
-    }
-
-    Draw(editor, obj){
-        editor.DrawText(obj.value, this.color);
+    Draw(editor, parseResult){
+        editor.DrawText(parseResult.value, this.color, this.isText);
     }
 }
 
 class PsObject{
-    constructor(name){
-        this.name = name;
-        this.fields = [];
-    }
-
-    Literal(literal, color){
-        this.fields.push({parser:new PsLiteral(literal, color)});
-    }
-
-    Punctuation(punctuation, color){
-        this.fields.push({parser:new PsPunctuation(punctuation, color)});
-    }
-
-    Add(name, parser){
-        this.fields.push({name:name, parser:parser});
+    constructor(fields){
+        this.fields = fields;
     }
 
     Parse(reader){
-        var o = {constructorType:this.name};
+        var parseResults = [];
         for(var f of this.fields){
-            var pv = f.parser.Parse(reader);
-            if(pv.constructorType == 'Error')
-                return pv;
-            if(f.name)
-                o[f.name] = pv;
+            var p = f.Parse(reader);
+            parseResults.push(p);
+            if(p.error)
+                return p;
         }
-        if(this.body)
-            o.body = [];
-        return o;
+        return {error:false, parseResults:parseResults};
     }
 
-    Draw(editor, obj, indent){
-        editor.Indent(indent);
-        var f = this.fields;
-        for(var i=0;i<f.length-1;i++){
-            f[i].parser.Draw(editor, obj[f[i].name]);
-            if(f[i].parser.isText && f[i+1].parser.isText)
-                editor.Space();
+    Draw(editor, parseResult){
+        for(var i=0;i<this.fields.length;i++){
+            this.fields[i].Draw(editor, parseResult.parseResults[i]);
         }
-        f[f.length-1].parser.Draw(editor, obj[f[f.length-1].name]);  
-        if(this.body){
-            editor.DrawText('{', 'yellow');
-            editor.NewLine();
-            for(var o of obj.body){
-                this.body.Draw(editor, o, indent+1);
-            }
-            editor.Indent(indent);
-            editor.DrawText('}', 'yellow');
-            editor.NewLine();
+    }
+
+    GetBody(parseResult){
+        return this.body;
+    }
+}
+
+class PsWhileDeliminator{
+    constructor(element, deliminator, minLength, oddOnlyLength){
+        this.element = element;
+        this.deliminator = deliminator;
+        this.minLength = minLength;
+        this.oddOnlyLength = oddOnlyLength;
+    }
+
+    GetReturnObj(array){
+        if(array.length<this.minLength){
+            return {error:true, array:array, msg:`Array length = ${array.length} when it should be >= ${this.minLength}`};
         }
         else{
-            editor.NewLine();
+            if(this.oddOnlyLength){
+                if(array.length%2 == 0)
+                    return {error:true, array:array, msg:`Array length is ${array.length}. It should be odd.`};
+                return {error:false, array:array}
+            }else
+                return {error:false, array:array};
         }
     }
 
-    LineCount(obj){
-        if(this.body){
-            var count = 2;
-            for(var o of obj.body){
-                count+=this.body.LineCount(o);
+    Parse(reader){
+        var array = [];
+        while(true){
+            var pe = this.element.Parse(reader);
+            if(pe.error){
+                return this.GetReturnObj(array);
             }
-            return count;
+            array.push(pe);
+            var pd = this.deliminator.Parse(reader);
+            if(pd.error){
+                return this.GetReturnObj(array);
+            }
+            array.push(pd);
         }
-        return 1;
     }
 
-    LineData(obj, line){
-        return CalcLineData(obj, line, this.body);
+    Draw(editor, parseResult){
+        for(var i=0;i<parseResult.array.length;i+=2){
+            this.element.Draw(editor, parseResult.array[i]);
+            if(i+1 < parseResult.array.length)
+                this.deliminator.Draw(editor, parseResult.array[i+1]);
+        }
     }
 }
 
@@ -173,126 +121,177 @@ class PsOr{
     }
 
     Parse(reader){
-        var index = reader.index;
-        for(var b of this.branches){
-            reader.index = index;
-            var pv = b.Parse(reader);
-            if(pv.constructorType != 'Error')
-                return pv;
-        }
-        return ParseError('No branches match');
-    }
-    
-    Draw(editor, obj, indent){
-        for(var b of this.branches){
-            if(obj.constructorType == b.name){
-                b.Draw(editor, obj, indent);
-                return;
+        var startIndex = reader.index;
+        var msg = undefined;
+        var msgIndex = -1;
+        for(var i=0;i<this.branches.length;i++){
+            reader.index = startIndex;
+            var p = this.branches[i].Parse(reader);
+            if(!p.error)
+                return {error:false, branch:i, parseResult:p};
+            else{
+                if(reader.index>msgIndex){
+                    msgIndex=reader.index;
+                    msg = p.msg;
+                }
             }
         }
-        if(obj.constructorType == 'EmptyLine'){
-            editor.NewLine();
-        }
-        else if(obj.constructorType == 'Error'){
-            editor.DrawText('Error: '+obj.msg, 'rgb(255,155,0)');
-            editor.NewLine();
-        }
-        else{
-            editor.DrawText('Error: Unknown type '+obj.constructorType);
-            editor.NewLine();
-        }
+        return {error:true, msg:msg};
+    }   
+
+    GetBody(parseResult){
+        return this.branches[parseResult.branch].GetBody(parseResult.parseResult);
     }
 
-    LineCount(obj){
-        for(var b of this.branches){
-            if(obj.constructorType == b.name){
-                return b.LineCount(obj);
-            }
-        }
-        return 1;
+    Draw(editor, parseResult){
+        this.branches[parseResult.branch].Draw(editor, parseResult.parseResult);
+    }
+}
+
+class PsCircular{
+    Parse(reader){
+        return this.parser.Parse(reader);
     }
 
-    LineData(obj, line){
-        for(var b of this.branches){
-            if(obj.constructorType == b.name){
-                return b.LineData(obj, line);
-            }
-        }
+    GetBody(parseResult){
+        return this.parser.GetBody(parseResult);
+    }
+
+    Draw(editor, parseResult){
+        this.parser.Draw(editor, parseResult);
     }
 }
 
 class Parser{
     constructor(){
-        var body = [];
+        var expression = new PsCircular();
+        var identifier = new PsToken('Identifier', 'rgb(50,50,255)', true);
+        var type = new PsToken('Identifier', 'rgb(0,155,255)', true);
+        var longIdentifier = new PsWhileDeliminator(identifier, new PsToken('.', 'yellow', false), 1, true);
 
-        var expression =  new PsLiteral('expr', 'orange');
+        var parenthesisExpression = new PsObject([new PsToken('(', 'yellow', false), expression, new PsToken(')', 'yellow', false)]);
 
-        var createVariable = new PsObject('createVariable');
-        createVariable.Add('type', new PsIdentifier('rgb(0,155,255)'));
-        createVariable.Add('name', new PsIdentifier('rgb(50,50,255)'));
-        createVariable.Punctuation('=', 'yellow');
-        createVariable.Add('value', expression);
+        var value = new PsOr([new PsToken('Number', 'magenta', false), longIdentifier, parenthesisExpression]);
 
-        var assign = new PsObject('assign');
-        assign.Add('name', new PsIdentifier('rgb(50,50,255)'));
-        assign.Punctuation('=', 'yellow');
-        assign.Add('value', expression);
+        var operators = new PsOr([new PsToken('+', 'orange', false), 
+            new PsToken('-', 'orange', false),
+            new PsToken('*', 'orange', false),
+            new PsToken('/', 'orange', false)]);
 
-        var method= new PsObject('method');
-        method.Add('type', new PsIdentifier('rgb(0,155,255)'));
-        method.Add('name', new PsIdentifier('rgb(50,50,255)'));
-        method.Punctuation('(', 'yellow');
-        method.Punctuation(')', 'yellow');
+        expression.parser = new PsWhileDeliminator(value, operators, 1, true);
+
+        var createVariable = new PsObject([
+            type,
+            identifier,
+            new PsToken('=', 'yellow', false),
+            expression]);
+
+        var assign = new PsObject([
+            longIdentifier,
+            new PsToken('=', 'yellow', false),
+            expression]);
+
+        var method = new PsObject([
+            type,
+            identifier,
+            new PsToken('(', 'yellow', false),
+            new PsToken(')', 'yellow', false)]);
         method.body = new PsOr([createVariable, assign]);
 
-        var field = new PsObject('field');
-        field.Add('type', new PsIdentifier('rgb(0,155,255)'));
-        field.Add('name', new PsIdentifier('rgb(50,50,255)'));
+        var field = new PsObject([type, identifier]);
 
-        var _class = new PsObject('class');
-        _class.Literal('class', 'rgb(0,255,155)');
-        _class.Add('name', new PsIdentifier('rgb(0,155,255)'));
+        var _class = new PsObject([
+            new PsToken('class', 'rgb(0,255,155)', true), 
+            new PsToken('Identifier', 'rgb(0,155,255)', true)]);
         _class.body = new PsOr([method, field]);
-        body.push(_class);
 
-        this.body = new PsOr(body);
+        var struct = new PsObject([
+            new PsToken('struct', 'rgb(0,255,155)', true), 
+            new PsToken('Identifier', 'rgb(0,155,255)', true)]);
+        struct.body = new PsOr([field, method]);
+
+        this.body = new PsOr([_class, struct]);
     }
 
-    DeleteLine(obj, line){
-        var lineData = this.LineData(obj, line);
-        if(lineData.index>0){
-            var count = lineData.parser.LineCount(lineData.obj.body[lineData.index-1]);
-            lineData.obj.body.splice(lineData.index-1, 1);
-            return count;
+    CountBodyFromClose(project, line){
+        var count = 1;
+        var indent = 1;
+        var l = line-1;
+        while(true){
+            if(project[l].openBody){
+                indent--;
+                if(indent==0)
+                    return count+1;
+
+            }
+            if(project[l].closeBody)
+                indent++;
+            l--;
+            count++;
+        }
+    }
+
+    AddEmptyLine(project, line){
+        project.splice(line, 0, {emptyLine:true});
+    }
+
+    DeleteLine(project, line){
+        if(line>0){
+            if(project[line-1].closeBody){
+                var count = this.CountBodyFromClose(project, line-1);
+                project.splice(line-count, count);
+                return count;
+            }
+            else{
+                project.splice(line-1, 1);
+                return 1;
+            }
         }
         return 0;
     }
 
-    LineCount(obj){
-        var count = 0;
-        for(var o of obj.body)
-            count+=this.body.LineCount(o);
-        return count;
+    Draw(editor, project){  
+        var indent = 0;
+        for(var p of project){
+            if(p.emptyLine){
+            }
+            else if(p.closeBody){
+                indent--;
+                editor.Indent(indent);
+                editor.DrawText('}', 'yellow', false);
+            }
+            else{
+                editor.Indent(indent);
+                p.parser.Draw(editor, p);
+                if(p.openBody){
+                    editor.DrawText('{', 'yellow', false);
+                    indent++;
+                }
+            }
+            editor.NewLine();
+        }
     }
 
-    LineData(obj, line){
-        return CalcLineData(obj, line, this.body);
-    }
-
-    Draw(editor, obj){
-        for(var i=0;i<obj.body.length;i++)
-            this.body.Draw(editor, obj.body[i], 0);
-    }
-
-    Parse(tokens, obj, line){
+    Parse(tokens, project, line){
         var reader = new TokenReader(tokens);
-        var lineData = this.LineData(obj, line);
-        var pv = lineData.parser.Parse(reader);
-        lineData.obj.body.splice(lineData.index, 0, pv);
-    }
-
-    AddEmptyLine(obj, line){
-        var lineData = this.LineData(obj, line);
-        lineData.obj.body.splice(lineData.index, 0, {constructorType:'EmptyLine'});
+        var parser = this.body;
+        if(line<project.length)
+            parser = project[line].parser;
+        var p = parser.Parse(reader);
+        if(!p.error){
+            var body = parser.GetBody(p);
+            p.parser = parser;
+            if(body){
+                p.openBody = true;
+                project.splice(line, 0, ...[p,{closeBody:true, parser:body}]);
+            }else
+                project.splice(line, 0, p);
+            return true;
+        }
+        else{
+            reader.index = 0;
+            alert(`Error: ${p.msg}`);
+            return false;
+        }
     }
 }

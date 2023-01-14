@@ -1,1 +1,7 @@
 class a
+int a
+int b
+void C()
+var x= (5+5)*2
+var y=(x+2)*3
+y=2*2+1

@@ -45,7 +45,7 @@ class CommandRunner{
     constructor(){
         this.parser = new Parser();
         this.line = 0;
-        this.project = {body:[]};
+        this.project = [];
         this.commands = [];
     }
 
@@ -53,72 +53,65 @@ class CommandRunner{
         if(this.commands.length>0){
             var lastCommand = this.commands[this.commands.length-1];
             var tokens = Tokenizer(lastCommand);
-            if(tokens[0].value == startsWith)
+            if(tokens.length>0 && tokens[0].value == startsWith)
                 return true;
         }
         return false;
     }
 
-    ProjectLineCount(){
-        return this.parser.LineCount(this.project);
-    }
-
-    RunCommand(command){
+    RunCommand(command, save){
         var tokens = Tokenizer(command);
         if(tokens.length>0){
             switch(tokens[0].value){
                 case '#delete_line':
                     var deleteCount = this.parser.DeleteLine(this.project, this.line);
                     this.line -= deleteCount;
+                    if(save)
+                        this.commands.push(command);
                     break;
                 case '#goto':
                     var lineNum = tokens[1].value;
                     var line = parseFloat(lineNum);
                     this.line = line;
+                    if(this.line<0)
+                        this.line = 0;
+                    if(this.line>=this.project.length)
+                        this.line = this.project.length;
+                    if(save){
+                        if(this.LastCommand('goto'))
+                            this.commands[this.commands.length-1] = command;
+                        else
+                            this.commands.push(command);
+                    }
                     break;
                 default:
-                    this.parser.Parse(tokens, this.project, this.line);
-                    this.line++;
+                    if(this.parser.Parse(tokens, this.project, this.line)){
+                        this.line++;
+                        if(save)
+                            this.commands.push(command);
+                    }
                     break;
             }
         }
         else{
             this.parser.AddEmptyLine(this.project, this.line);
             this.line++;
+            if(save)
+                this.commands.push(command);
         }
-    }
-
-    RunAndSaveCommand(command){
-        this.RunCommand(command);
-        this.commands.push(command);
-    }
-
-    RunAndReplaceCommand(command){
-        this.RunCommand(command);
-        this.commands[this.commands.length-1] = command;
     }
 
     MoveUp(){
-        if(this.line>0){
-            if(!this.LastCommand('#goto'))
-                this.RunAndSaveCommand(`#goto ${this.line-1}`);
-            else
-                this.RunAndReplaceCommand(`#goto ${this.line-1}`);
-        }
+        this.RunCommand(`#goto ${this.line-1}`, true);
     }
 
     MoveDown(){
-        if(this.line<=this.ProjectLineCount()){
-            if(!this.LastCommand('#goto'))
-                this.RunAndSaveCommand(`#goto ${this.line+1}`);
-            else
-                this.RunAndReplaceCommand(`#goto ${this.line+1}`);
-        }
+        this.RunCommand(`#goto ${this.line+1}`, true);
     }
 
     DeleteLine(){
         if(this.line > 0)
-            this.RunAndSaveCommand('#delete_line');
+            this.RunCommand('#delete_line', true);
     }
 
     Draw(editor){
@@ -127,9 +120,9 @@ class CommandRunner{
 
     RunFromBeginning(){
         this.line = 0;
-        this.project = {body:[]};
+        this.project = [];
         for(var c of this.commands){
-            this.RunCommand(c);
+            this.RunCommand(c, false);
         }
     }
 
@@ -166,24 +159,32 @@ class CodeEditor{
         var indentWidth= this.ctx.measureText('    ').width;
         for(var i=0;i<indent;i++)
             this.x+=indentWidth;
+        this.lastIsText = false;
     }
 
     Space(){
         this.x+=this.ctx.measureText(' ').width;
+        this.lastIsText = false;
     }
 
-    DrawText(text, color){
+    DrawText(text, color, isText){
+        if(this.lastIsText && isText){
+            this.Space();
+        }
         this.ctx.fillStyle = color;
         this.ctx.fillText(text,this.x,this.y+this.fontSize);
         this.x+=this.ctx.measureText(text).width;
+        this.lastIsText = isText;
     }
 
     NewLine(){
         this.x = 0;
         this.y+=this.lineSize;
+        this.lastIsText = false;
     }
 
     Update(){
+        this.lastIsText = false;
         this.x = 0;
         this.y = 0;
         this.ctx.font = this.fontSize+'px '+this.font;
@@ -209,7 +210,7 @@ class CodeEditor{
             this.commandRunner.MoveDown();
         }
         else if(e.key == 'Enter'){
-            this.commandRunner.RunAndSaveCommand(this.commandLine);
+            this.commandRunner.RunCommand(this.commandLine, true);
             this.commandLine = '';
         }
         else if(e.key == 'Backspace'){
